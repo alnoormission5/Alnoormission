@@ -29,7 +29,7 @@ async function start() {
   if (!data || !data.active) { await sb.auth.signOut(); login(); return toast('This account is not active. Contact the school office.', 1); }
   me = data;
   const tabs = { admin: [['Performance', adminPerf], ['People', adminPeople], ['Setup', adminSetup], ['Audit log', adminAudit], ['Report cards', reportView]], teacher: [['Enter marks', teacherView], ['Report cards', reportView]], student: [['My results', studentView]] }[me.role];
-  $('#app').innerHTML = `<header><b>School Marks Portal</b><nav id="nav">${tabs.map((t, i) => `<button data-i="${i}">${t[0]}</button>`).join('')}</nav><span>${esc(me.full_name)} (${me.role}) <button id="out">Sign out</button></span></header><main id="main"></main>`;
+  $('#app').innerHTML = `<header><b>AL Noor Mission School</b><nav id="nav">${tabs.map((t, i) => `<button data-i="${i}">${t[0]}</button>`).join('')}</nav><span>${esc(me.full_name)} (${me.role}) <button id="out">Sign out</button></span></header><main id="main"></main>`;
   const go = async i => {
     [...$('#nav').children].forEach((b, j) => b.classList.toggle('on', i === j));
     $('#main').innerHTML = '<p class="mut">Loading…</p>';
