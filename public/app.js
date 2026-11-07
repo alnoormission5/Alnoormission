@@ -12,7 +12,7 @@ function busy(b, on) { b.dataset.t ??= b.textContent; b.disabled = on; b.textCon
 let me = null;
 
 function login() {
-  $('#app').innerHTML = `<main class="login"><form id="lf" class="card"><h1>School Marks Portal</h1>
+  $('#app').innerHTML = `<main class="login"><form id="lf" class="card"><h1>AL Noor Mission School</h1>
   <label>Email<input type="email" name="e" required autocomplete="username"></label>
   <label>Password<input type="password" name="p" required autocomplete="current-password"></label>
   <button class="pri">Sign in</button></form></main>`;
