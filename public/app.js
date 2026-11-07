@@ -27,8 +27,8 @@ async function start() {
   const { data: { user } } = await sb.auth.getUser(); if (!user) return login();
   const { data } = await sb.from('profiles').select('*').eq('id', user.id).single();
   if (!data || !data.active) { await sb.auth.signOut(); login(); return toast('This account is not active. Contact the school office.', 1); }
-  me = data;
-  const tabs = { admin: [['Performance', adminPerf], ['People', adminPeople], ['Setup', adminSetup], ['Attendance', attendanceView], ['Holidays', holidaysView], ['Audit log', adminAudit], ['Report cards', reportView], ['Result access', resultAccessView]], teacher: [['Enter marks', teacherView], ['Attendance', attendanceView], ['Report cards', reportView]], student: [['My results', studentView], ['My attendance', myAttendance]] }[me.role];
+  me = data;await loadSettings();
+  const tabs = { admin: [['Performance', adminPerf], ['People', adminPeople], ['Setup', adminSetup], ['Attendance', attendanceView], ['Staff attendance', staffAttView], ['Holidays', holidaysView], ['Audit log', adminAudit], ['Report cards', reportView], ['Result access', resultAccessView]], teacher: [['Check-in', checkinView], ['Enter marks', teacherView], ['Attendance', attendanceView], ['Report cards', reportView], ['Result access', resultAccessView]], student: [['My results', studentView], ['My attendance', myAttendance]] }[me.role];
   $('#app').innerHTML = `<header><b>AL Noor Mission School</b><nav id="nav">${tabs.map((t, i) => `<button data-i="${i}">${t[0]}</button>`).join('')}</nav><span>${esc(me.full_name)} (${me.role}) <button id="out">Sign out</button></span></header><main id="main"></main>`;
   const go = async i => {
     [...$('#nav').children].forEach((b, j) => b.classList.toggle('on', i === j));
@@ -210,7 +210,7 @@ async function reportView(el) {
   });
 }
 /* ---------- ATTENDANCE ---------- */
-const WEEKLY_OFF = [0]; // 0 = Sunday. Use [0, 6] if Saturday is also off.
+let WEEKLY_OFF = [0]; // 0 = Sunday. Use [0, 6] if Saturday is also off.
 const ST = { present: 'Present', absent: 'Absent', late: 'Late', leave: 'Leave' };
 const iso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const today = () => iso(new Date());
@@ -340,6 +340,91 @@ async function resultAccessView(el) {
       try { await q(sb.from('result_blocks').delete().eq('student_id', id)); toast('Results unblocked'); } finally { busy(e.target, 0); }
     }
     load();
+  });
+}
+/* ---------- STAFF (TEACHER) CHECK-IN ---------- */
+let SET = { work_start: '09:00:00', late_after_min: 15, checkin_opens: '07:00:00', checkin_closes: '14:00:00', weekly_off: [0] };
+async function loadSettings() { try { const { data } = await sb.from('school_settings').select('*').eq('id', 1).maybeSingle(); if (data) { SET = data; WEEKLY_OFF = data.weekly_off; } } catch (e) { } }
+const fmtT = t => { const [h, m] = t.split(':'); const H = +h; return `${H % 12 || 12}:${m} ${H < 12 ? 'AM' : 'PM'}`; };
+const lateAt = () => { const [h, m] = SET.work_start.split(':'); const t = +h * 60 + +m + SET.late_after_min; return fmtT(`${Math.floor(t / 60) % 24}:${String(t % 60).padStart(2, '0')}`); };
+const tmIST = ts => ts ? new Date(ts).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Kolkata' }) : '-';
+const SL = { on_time: 'On time', late: 'Late', absent: 'Absent', leave: 'Leave' };
+const badge = s => `<span class="badge ${s}">${SL[s]}</span>`;
+
+/* Teacher: check in once per day */
+async function checkinView(el) {
+  const t = today();
+  const [rows, hol] = await Promise.all([
+    q(sb.from('teacher_checkins').select('date,checked_in_at,status').order('date', { ascending: false }).limit(40)),
+    q(sb.from('holidays').select('name').eq('date', t))
+  ]);
+  const mine = rows.find(r => r.date === t), mo = rows.filter(r => r.date.startsWith(t.slice(0, 7)));
+  let box;
+  if (mine && mine.checked_in_at) box = `<h3>You are checked in</h3><p style="font-size:24px;margin:8px 0"><b>${tmIST(mine.checked_in_at)}</b> ${badge(mine.status)}</p>`;
+  else if (mine) box = `<h3>Today is marked by the administrator</h3><p>${badge(mine.status)}</p>`;
+  else if (hol.length) box = `<h3>Today is a holiday</h3><p>${esc(hol[0].name)}</p>`;
+  else if (WEEKLY_OFF.includes(new Date().getDay())) box = '<h3>Today is a weekly off day</h3>';
+  else box = `<h3>You have not checked in today</h3><p class="mut">School starts at ${fmtT(SET.work_start)}. Checking in after ${lateAt()} is marked Late. Check-in is open from ${fmtT(SET.checkin_opens)} to ${fmtT(SET.checkin_closes)}. You can check in only once a day.</p><button id="ci" class="pri">Check in now</button>`;
+  const c = k => mo.filter(r => r.status === k).length;
+  el.innerHTML = `<h2>Check-in</h2><div class="card">${box}</div>
+  <div class="card"><h3>This month</h3><p class="mut">On time ${c('on_time')} · Late ${c('late')} · Leave ${c('leave')} · Absent ${c('absent')}</p>${tbl(['Date', 'Check-in time', 'Status'], mo.map(r => [esc(r.date), tmIST(r.checked_in_at), badge(r.status)]))}</div>`;
+  const b = $('#ci');
+  if (b) b.onclick = safe(async () => {
+    busy(b, 1);
+    try { await q(sb.from('teacher_checkins').insert({ status: 'on_time' })); toast('Checked in. Have a good day!'); await checkinView(el); }
+    catch (e) { busy(b, 0); throw /duplicate key/.test(e.message) ? new Error('You have already checked in today') : e; }
+  });
+}
+
+/* Admin: settings, daily staff attendance, monthly summary */
+async function staffAttView(el) {
+  const te = await q(sb.from('profiles').select('id,full_name').eq('role', 'teacher').eq('active', true).order('full_name'));
+  const D = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  el.innerHTML = `<h2>Staff attendance</h2>
+  <form id="sf" class="card grid"><h3 style="grid-column:1/-1;margin:0">Check-in settings</h3>
+  <label>School starts at<input type="time" name="work_start" required value="${SET.work_start.slice(0, 5)}"></label>
+  <label>Mark Late after (minutes)<input type="number" name="late_after_min" min="0" max="240" required value="${SET.late_after_min}"></label>
+  <label>Check-in opens<input type="time" name="checkin_opens" required value="${SET.checkin_opens.slice(0, 5)}"></label>
+  <label>Check-in closes<input type="time" name="checkin_closes" required value="${SET.checkin_closes.slice(0, 5)}"></label>
+  <div style="grid-column:1/-1"><b>Weekly off days</b> <span class="mut">(applies to staff and student attendance)</span><div class="row" style="margin-top:6px">${D.map((n, i) => `<label style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" name="off" value="${i}" style="padding:0;width:auto" ${SET.weekly_off.includes(i) ? 'checked' : ''}>${n}</label>`).join('')}</div></div>
+  <div><button class="pri">Save settings</button></div></form>
+  <div class="card row"><label>Date<input type="date" id="d" value="${today()}" max="${today()}"></label><button id="ld" class="pri">Show day</button></div><div id="day"></div>
+  <div class="card row"><label>Month<input type="month" id="m" value="${today().slice(0, 7)}"></label><button id="rp">Monthly summary</button></div><div id="rep"></div>`;
+
+  $('#sf').onsubmit = safe(async ev => {
+    ev.preventDefault(); const f = ev.target, b = f.querySelector('button.pri');
+    const v = { work_start: f.work_start.value, late_after_min: +f.late_after_min.value, checkin_opens: f.checkin_opens.value, checkin_closes: f.checkin_closes.value, weekly_off: [...f.querySelectorAll('input[name=off]:checked')].map(i => +i.value) };
+    if (!(v.checkin_opens < v.checkin_closes)) return toast('Check-in must open before it closes', 1);
+    if (v.work_start < v.checkin_opens || v.work_start > v.checkin_closes) return toast('School start time must be inside the check-in window', 1);
+    busy(b, 1);
+    try { await q(sb.from('school_settings').update(v).eq('id', 1)); await loadSettings(); toast('Settings saved'); } finally { busy(b, 0); }
+  });
+
+  $('#ld').onclick = safe(async () => {
+    const d = $('#d').value; if (!d) return toast('Choose a date', 1);
+    const [hol, ci] = await Promise.all([q(sb.from('holidays').select('name').eq('date', d)), q(sb.from('teacher_checkins').select('teacher_id,checked_in_at,status').eq('date', d))]);
+    const C = Object.fromEntries(ci.map(x => [x.teacher_id, x]));
+    const note = hol.length ? 'Holiday: ' + esc(hol[0].name) : WEEKLY_OFF.includes(dow(d)) ? 'Weekly off day' : '';
+    $('#day').innerHTML = `<div class="card">${note ? `<p><b>${note}</b></p>` : ''}${tbl(['Teacher', 'Check-in time', 'Status (admin can correct)'], te.map(t => { const c = C[t.id]; return [esc(t.full_name), c ? tmIST(c.checked_in_at) : '-', `<select class="ts" data-id="${esc(t.id)}">${['', 'on_time', 'late', 'leave', 'absent'].map(k => `<option value="${k}" ${(c?.status || '') === k ? 'selected' : ''}>${k ? SL[k] : 'Not marked'}</option>`).join('')}</select>`]; }))}</div>`;
+    $('#day').onchange = safe(async e => {
+      const s = e.target; if (!s.classList.contains('ts')) return;
+      if (s.value) await q(sb.from('teacher_checkins').upsert({ teacher_id: s.dataset.id, date: d, status: s.value }, { onConflict: 'teacher_id,date' }));
+      else await q(sb.from('teacher_checkins').delete().eq('teacher_id', s.dataset.id).eq('date', d));
+      toast('Updated');
+    });
+  });
+
+  $('#rp').onclick = safe(async () => {
+    const m = $('#m').value; if (!m) return toast('Choose a month', 1);
+    const last = monthEnd(m), upto = last < today() ? last : today();
+    const [hol, ci] = await Promise.all([q(sb.from('holidays').select('date').gte('date', m + '-01').lte('date', last)), pages(() => sb.from('teacher_checkins').select('teacher_id,date,status').gte('date', m + '-01').lte('date', last).order('date').order('teacher_id'))]);
+    const H = new Set(hol.map(x => x.date)), wd = new Set();
+    for (let x = new Date(m + '-01T00:00:00'); iso(x) <= upto; x.setDate(x.getDate() + 1)) { const s = iso(x); if (!H.has(s) && !WEEKLY_OFF.includes(x.getDay())) wd.add(s); }
+    $('#rep').innerHTML = `<div class="card">${tbl(['Teacher', 'Working days', 'On time', 'Late', 'Leave', 'Absent', 'Attendance %'], te.map(t => {
+      const r = ci.filter(x => x.teacher_id === t.id && wd.has(x.date)), c = k => r.filter(x => x.status === k).length;
+      const ab = c('absent') + wd.size - r.length;
+      return [esc(t.full_name), wd.size, c('on_time'), c('late'), c('leave'), ab, `<b>${wd.size ? num(100 * (c('on_time') + c('late')) / wd.size) + '%' : '-'}</b>`];
+    }))}<p class="mut">Working days exclude holidays, weekly offs and future dates. Days with no check-in count as Absent. Attendance % = (On time + Late) divided by working days.</p></div>`;
   });
 }
 start();
