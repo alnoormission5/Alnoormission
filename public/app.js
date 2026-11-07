@@ -28,7 +28,7 @@ async function start() {
   const { data } = await sb.from('profiles').select('*').eq('id', user.id).single();
   if (!data || !data.active) { await sb.auth.signOut(); login(); return toast('This account is not active. Contact the school office.', 1); }
   me = data;
-  const tabs = { admin: [['Performance', adminPerf], ['People', adminPeople], ['Setup', adminSetup], ['Attendance', attendanceView], ['Holidays', holidaysView], ['Audit log', adminAudit], ['Report cards', reportView]], teacher: [['Enter marks', teacherView], ['Attendance', attendanceView], ['Report cards', reportView]], student: [['My results', studentView], ['My attendance', myAttendance]] }[me.role];
+  const tabs = { admin: [['Performance', adminPerf], ['People', adminPeople], ['Setup', adminSetup], ['Attendance', attendanceView], ['Holidays', holidaysView], ['Audit log', adminAudit], ['Report cards', reportView], ['Result access', resultAccessView]], teacher: [['Enter marks', teacherView], ['Attendance', attendanceView], ['Report cards', reportView]], student: [['My results', studentView], ['My attendance', myAttendance]] }[me.role];
   $('#app').innerHTML = `<header><b>AL Noor Mission School</b><nav id="nav">${tabs.map((t, i) => `<button data-i="${i}">${t[0]}</button>`).join('')}</nav><span>${esc(me.full_name)} (${me.role}) <button id="out">Sign out</button></span></header><main id="main"></main>`;
   const go = async i => {
     [...$('#nav').children].forEach((b, j) => b.classList.toggle('on', i === j));
@@ -42,6 +42,8 @@ async function start() {
 
 /* ---------- STUDENT ---------- */
 async function studentView(el) {
+    const blk = await q(sb.from('result_blocks').select('message').maybeSingle());
+  if (blk) return el.innerHTML = `<h2>My results</h2><div class="card" style="border-left:5px solid var(--err)"><h3>Results are on hold</h3><p>${esc(blk.message)}</p><p class="mut">Please contact the school office.</p></div>`;
   const [m, ex, sub] = await Promise.all([q(sb.from('marks').select('exam_id,subject_id,marks_obtained,max_marks')), q(sb.from('exams').select('id,name').order('name')), q(sb.from('subjects').select('id,name'))]);
   const sn = Object.fromEntries(sub.map(s => [s.id, s.name]));
   let T = 0, M = 0, pcts = [], h = '';
@@ -305,5 +307,39 @@ async function myAttendance(el) {
       ${hol.length ? `<div class="card"><b>Holidays this month</b><br>${hol.map(x => `${esc(x.date)}: ${esc(x.name)}`).join('<br>')}</div>` : ''}`;
   });
   $('#m').onchange = draw; draw();
+}
+/* ---------- RESULT ACCESS (block / unblock students) ---------- */
+async function resultAccessView(el) {
+  const cl = me.role === 'admin' ? await q(sb.from('classes').select('id,name,section'))
+    : (await q(sb.from('class_teachers').select('classes(id,name,section)').eq('teacher_id', me.id))).map(x => x.classes);
+  if (!cl.length) return el.innerHTML = '<h2>Result access</h2><p>This is managed by the class teacher. Ask the administrator to assign you as class teacher (Setup).</p>';
+  const DEF = 'Fee is due. Please pay the fee to view your results.';
+  el.innerHTML = `<h2>Result access</h2><div class="card row"><label>Class<select id="c">${opts(cl, cls)}</select></label><button id="ld" class="pri">Load students</button></div>
+  <p class="mut">A blocked student cannot see any marks. They see your message instead. Edit the message before clicking Block.</p><div id="grid"></div>`;
+  const load = safe(async () => {
+    const st = await q(sb.from('students').select('id,admission_no,full_name').eq('class_id', $('#c').value).order('admission_no'));
+    const bl = await q(sb.from('result_blocks').select('student_id,message'));
+    const B = Object.fromEntries(bl.map(x => [x.student_id, x.message]));
+    $('#grid').innerHTML = `<div class="card">${tbl(['Admission no', 'Student', 'Status', 'Message to student', ''], st.map(s => {
+      const b = B[s.id] !== undefined;
+      return [esc(s.admission_no), esc(s.full_name), b ? '<b class="err">Blocked</b>' : 'Allowed',
+        `<input class="bm" data-id="${esc(s.id)}" maxlength="200" value="${esc(b ? B[s.id] : DEF)}" style="width:100%;min-width:280px" aria-label="Message for ${esc(s.full_name)}">`,
+        b ? `<button data-a="unblock" data-id="${esc(s.id)}">Unblock</button>` : `<button class="pri" data-a="block" data-id="${esc(s.id)}">Block</button>`];
+    }))}</div>`;
+  });
+  $('#ld').onclick = load;
+  $('#grid').onclick = safe(async e => {
+    const a = e.target.dataset.a, id = e.target.dataset.id; if (!a) return;
+    if (a === 'block') {
+      const msg = $('#grid').querySelector(`.bm[data-id="${id}"]`).value.trim();
+      if (msg.length < 3 || msg.length > 200) return toast('Message must be 3 to 200 characters', 1);
+      busy(e.target, 1);
+      try { await q(sb.from('result_blocks').upsert({ student_id: id, message: msg }, { onConflict: 'student_id' })); toast('Results blocked for this student'); } finally { busy(e.target, 0); }
+    } else {
+      busy(e.target, 1);
+      try { await q(sb.from('result_blocks').delete().eq('student_id', id)); toast('Results unblocked'); } finally { busy(e.target, 0); }
+    }
+    load();
+  });
 }
 start();
