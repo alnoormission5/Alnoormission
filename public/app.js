@@ -1,3 +1,14 @@
+/* ---------- THEME ---------- */
+const themeNow = () => document.documentElement.dataset.theme;
+const themeLabel = () => themeNow() === 'dark' ? 'Light theme' : 'Dark theme';
+(function () { let t = null; try { t = localStorage.getItem('theme'); } catch (e) { } if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; document.documentElement.dataset.theme = t; })();
+document.addEventListener('click', e => {
+  if (!e.target.classList.contains('thbtn')) return;
+  const t = themeNow() === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = t;
+  try { localStorage.setItem('theme', t); } catch (x) { }
+  document.querySelectorAll('.thbtn').forEach(b => b.textContent = themeLabel());
+});
 const sb = supabase.createClient(ENV.SUPABASE_URL, ENV.SUPABASE_ANON_KEY);
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -15,7 +26,7 @@ function login() {
   $('#app').innerHTML = `<main class="login"><form id="lf" class="card"><h1>AL Noor Mission School</h1>
   <label>Email<input type="email" name="e" required autocomplete="username"></label>
   <label>Password<input type="password" name="p" required autocomplete="current-password"></label>
-  <button class="pri">Sign in</button></form></main>`;
+  <button class="pri">Sign in</button><button type="button" class="thbtn">${themeLabel()}</button></form></main>`;
   $('#lf').onsubmit = async ev => {
     ev.preventDefault(); const f = ev.target, b = f.querySelector('button'); busy(b, 1);
     const { error } = await sb.auth.signInWithPassword({ email: f.e.value.trim(), password: f.p.value });
@@ -29,13 +40,14 @@ async function start() {
   if (!data || !data.active) { await sb.auth.signOut(); login(); return toast('This account is not active. Contact the school office.', 1); }
   me = data;await loadSettings();
   const tabs = { admin: [['Performance', adminPerf], ['People', adminPeople], ['Setup', adminSetup], ['Attendance', attendanceView], ['Staff attendance', staffAttView], ['Holidays', holidaysView], ['Audit log', adminAudit], ['Report cards', reportView], ['Result access', resultAccessView]], teacher: [['Check-in', checkinView], ['Enter marks', teacherView], ['Attendance', attendanceView], ['Report cards', reportView], ['Result access', resultAccessView]], student: [['My results', studentView], ['My attendance', myAttendance]] }[me.role];
-  $('#app').innerHTML = `<header><b>AL Noor Mission School</b><nav id="nav">${tabs.map((t, i) => `<button data-i="${i}">${t[0]}</button>`).join('')}</nav><span>${esc(me.full_name)} (${me.role}) <button id="out">Sign out</button></span></header><main id="main"></main>`;
+  $('#app').innerHTML = `<header><button id="mb" class="mb" aria-label="Menu">☰</button><b>${esc(ENV.SCHOOL_NAME || 'School Marks Portal')}</b><span>${esc(me.full_name)} (${me.role}) <button type="button" class="thbtn">${themeLabel()}</button> <button id="out">Sign out</button></span></header>
+  <div class="shell"><aside id="side"><nav id="nav">${tabs.map((t, i) => `<button data-i="${i}">${t[0]}</button>`).join('')}</nav></aside><div id="scrim"></div><main id="main"></main></div>`;
   const go = async i => {
     [...$('#nav').children].forEach((b, j) => b.classList.toggle('on', i === j));
     $('#main').innerHTML = '<p class="mut">Loading…</p>';
     try { await tabs[i][1]($('#main')); } catch (e) { $('#main').innerHTML = `<p class="err">Could not load this page: ${esc(e.message)}</p>`; }
   };
-  $('#nav').onclick = e => e.target.dataset.i && go(+e.target.dataset.i);
+    $('#nav').onclick = e => { if (e.target.dataset.i) { document.body.classList.remove('menu'); go(+e.target.dataset.i); } };   $('#mb').onclick = () => document.body.classList.toggle('menu');   $('#scrim').onclick = () => document.body.classList.remove('menu');
   $('#out').onclick = async () => { await sb.auth.signOut(); me = null; login(); };
   go(0);
 }
