@@ -55,29 +55,64 @@ async function studentView(el) {
 }
 
 /* ---------- TEACHER ---------- */
+/* ---------- TEACHER ---------- */
 async function teacherView(el) {
-  const [as, ex] = await Promise.all([q(sb.from('teacher_assignments').select('class_id,subject_id,classes(name,section),subjects(name)')), q(sb.from('exams').select('id,name,max_marks').order('name'))]);
+  const [as, ex] = await Promise.all([
+    q(sb.from('teacher_assignments').select('class_id,subject_id,classes(name,section),subjects(name)')),
+    q(sb.from('exams').select('id,name,max_marks').order('name'))
+  ]);
   if (!as.length) return el.innerHTML = '<p>No classes are assigned to you yet. Contact the administrator.</p>';
   if (!ex.length) return el.innerHTML = '<p>No exams exist yet. Contact the administrator.</p>';
-  el.innerHTML = `<h2>Enter marks</h2><div class="card row"><label>Class and subject<select id="a">${as.map((x, i) => `<option value="${i}">${esc(cls(x.classes))}: ${esc(x.subjects.name)}</option>`).join('')}</select></label>
-  <label>Exam<select id="e">${ex.map((x, i) => `<option value="${i}">${esc(x.name)} (max ${x.max_marks})</option>`).join('')}</select></label><button id="ld" class="pri">Load students</button></div><div id="grid"></div>`;
+  const classes = [...new Map(as.map(x => [x.class_id, x.classes])).entries()];
+  el.innerHTML = `<h2>Enter marks</h2><div class="card row">
+    <label>Class<select id="a">${classes.map(([id, c]) => `<option value="${esc(id)}">${esc(cls(c))}</option>`).join('')}</select></label>
+    <label>Exam<select id="e">${ex.map((x, i) => `<option value="${i}">${esc(x.name)} (max ${x.max_marks} per subject)</option>`).join('')}</select></label>
+    <button id="ld" class="pri">Load students</button></div><div id="grid"></div>`;
+
   $('#ld').onclick = safe(async () => {
-    const a = as[$('#a').value], e = ex[$('#e').value];
-    const st = await q(sb.from('students').select('id,admission_no,full_name').eq('class_id', a.class_id).order('admission_no'));
-    const mk = await q(sb.from('marks').select('student_id,marks_obtained').eq('subject_id', a.subject_id).eq('exam_id', e.id));
-    const cur = Object.fromEntries(mk.map(x => [x.student_id, x.marks_obtained]));
-    $('#grid').innerHTML = `<div class="card">${tbl(['Admission no', 'Student', `Marks (out of ${e.max_marks})`, 'Percentage'], st.map(s => [esc(s.admission_no), esc(s.full_name), `<input type="number" class="mk" data-id="${esc(s.id)}" min="0" max="${e.max_marks}" step="0.01" value="${cur[s.id] ?? ''}" aria-label="Marks for ${esc(s.full_name)}">`, '<span class="pc"></span>']))}<p id="avg"></p><button id="sv" class="pri">Save marks</button></div>`;
-    const calc = () => { let t = 0, n = 0; document.querySelectorAll('.mk').forEach(i => { const p = i.closest('tr').querySelector('.pc'); if (i.value === '') { p.textContent = ''; return; } const v = +i.value; p.textContent = num(100 * v / e.max_marks) + '%'; t += v; n++; }); $('#avg').textContent = n ? `Class average: ${num(t / n)} out of ${e.max_marks} (${num(100 * t / n / e.max_marks)}%), ${n} of ${st.length} entered` : ''; };
+    const cid = $('#a').value, e = ex[$('#e').value];
+    const subs = as.filter(x => x.class_id === cid).map(x => ({ id: x.subject_id, name: x.subjects.name })).sort((a, b) => a.name.localeCompare(b.name));
+    const st = await q(sb.from('students').select('id,admission_no,full_name').eq('class_id', cid).order('admission_no'));
+    const mk = await q(sb.from('marks').select('student_id,subject_id,marks_obtained').eq('exam_id', e.id).in('subject_id', subs.map(s => s.id)));
+    const cur = Object.fromEntries(mk.map(x => [x.student_id + '|' + x.subject_id, x.marks_obtained]));
+
+    const heads = ['Student', ...subs.map(s => `${esc(s.name)} (/${e.max_marks})`), 'Total', 'Percentage'];
+    const rows = st.map(s => [
+      `${esc(s.full_name)}<div class="mut" style="font-size:12px">${esc(s.admission_no)}</div>`,
+      ...subs.map(sj => `<input type="number" class="mk" data-st="${esc(s.id)}" data-sb="${esc(sj.id)}" min="0" max="${e.max_marks}" step="0.01" value="${cur[s.id + '|' + sj.id] ?? ''}" aria-label="${esc(sj.name)} marks for ${esc(s.full_name)}">`),
+      '<span class="tt"></span>', '<span class="pc"></span>'
+    ]);
+    $('#grid').innerHTML = `<div class="card">${tbl(heads, rows)}<p id="avg" class="mut"></p><button id="sv" class="pri">Save marks</button></div>`;
+
+    const calc = () => {
+      document.querySelectorAll('#grid tbody tr').forEach(tr => {
+        let t = 0, n = 0;
+        tr.querySelectorAll('.mk').forEach(i => { if (i.value !== '') { t += +i.value; n++; } });
+        tr.querySelector('.tt').textContent = n ? `${num(t)}/${num(n * e.max_marks)}` : '';
+        tr.querySelector('.pc').textContent = n ? num(100 * t / (n * e.max_marks)) + '%' : '';
+      });
+      $('#avg').textContent = 'Class average: ' + subs.map(sj => {
+        const v = [...document.querySelectorAll('.mk')].filter(i => i.dataset.sb === sj.id && i.value !== '').map(i => +i.value);
+        return `${sj.name} ${v.length ? num(v.reduce((a, b) => a + b, 0) / v.length) : '-'}`;
+      }).join(' · ');
+    };
     $('#grid').oninput = calc; calc();
+
     $('#sv').onclick = safe(async ev => {
-      const rows = [];
-      for (const i of document.querySelectorAll('.mk')) { if (i.value === '') continue; const v = +i.value; if (!(v >= 0 && v <= e.max_marks)) return toast(`Marks must be between 0 and ${e.max_marks}`, 1); rows.push({ student_id: i.dataset.id, subject_id: a.subject_id, exam_id: e.id, marks_obtained: v }); }
-      if (!rows.length) return toast('Enter at least one mark', 1);
-      busy(ev.target, 1); try { await q(sb.from('marks').upsert(rows, { onConflict: 'student_id,subject_id,exam_id' })); toast(`Saved marks for ${rows.length} students`); } finally { busy(ev.target, 0); }
+      const out = [];
+      for (const i of document.querySelectorAll('.mk')) {
+        if (i.value === '') continue;
+        const v = +i.value;
+        if (!(v >= 0 && v <= e.max_marks)) return toast(`Marks must be between 0 and ${e.max_marks}`, 1);
+        out.push({ student_id: i.dataset.st, subject_id: i.dataset.sb, exam_id: e.id, marks_obtained: v });
+      }
+      if (!out.length) return toast('Enter at least one mark', 1);
+      busy(ev.target, 1);
+      try { await q(sb.from('marks').upsert(out, { onConflict: 'student_id,subject_id,exam_id' })); toast(`Saved ${out.length} marks`); }
+      finally { busy(ev.target, 0); }
     });
   });
 }
-
 /* ---------- ADMIN ---------- */
 async function adminPerf(el) {
   const [cl, ex] = await Promise.all([q(sb.from('classes').select('id,name,section')), q(sb.from('exams').select('id,name'))]);
