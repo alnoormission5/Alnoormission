@@ -207,5 +207,103 @@ async function reportView(el) {
     $('#pr').disabled = !cards.length;
   });
 }
+/* ---------- ATTENDANCE ---------- */
+const WEEKLY_OFF = [0]; // 0 = Sunday. Use [0, 6] if Saturday is also off.
+const ST = { present: 'Present', absent: 'Absent', late: 'Late', leave: 'Leave' };
+const iso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const today = () => iso(new Date());
+const dow = s => new Date(s + 'T00:00:00').getDay();
+const monthEnd = m => `${m}-${String(new Date(+m.slice(0, 4), +m.slice(5), 0).getDate()).padStart(2, '0')}`;
+const attPct = r => { const a = r.filter(x => x.status === 'present' || x.status === 'late').length; return r.length ? num(100 * a / r.length) + '%' : '-'; };
+async function pages(make) { let out = [], from = 0; for (;;) { const r = await q(make().range(from, from + 999)); out = out.concat(r); if (r.length < 1000) return out; from += 1000; } }
+const myClasses = async () => me.role === 'admin' ? q(sb.from('classes').select('id,name,section')) : (await q(sb.from('class_teachers').select('classes(id,name,section)').eq('teacher_id', me.id))).map(x => x.classes);
 
+/* Class teacher / admin: mark attendance + monthly summary */
+async function attendanceView(el) {
+  const cl = await myClasses();
+  if (!cl.length) return el.innerHTML = '<h2>Attendance</h2><p>Attendance is marked by the class teacher. Ask the administrator to assign you as class teacher (Setup).</p>';
+  el.innerHTML = `<h2>Attendance</h2><div class="card row"><label>Class<select id="c">${opts(cl, cls)}</select></label>
+  <label>Date<input type="date" id="d" value="${today()}" max="${today()}"></label><button id="ld" class="pri">Load students</button></div><div id="grid"></div>
+  <div class="card row"><label>Month<input type="month" id="m" value="${today().slice(0, 7)}"></label><button id="rp">Monthly summary</button></div><div id="rep"></div>`;
+
+  $('#ld').onclick = safe(async () => {
+    const d = $('#d').value, cid = $('#c').value;
+    if (!d) return toast('Choose a date', 1);
+    if (d > today()) return toast('You cannot mark attendance for a future date', 1);
+    const [hol, st, at] = await Promise.all([
+      q(sb.from('holidays').select('name').eq('date', d)),
+      q(sb.from('students').select('id,admission_no,full_name').eq('class_id', cid).order('admission_no')),
+      q(sb.from('attendance').select('student_id,status').eq('date', d))
+    ]);
+    if (hol.length) return $('#grid').innerHTML = `<div class="card"><b>${esc(d)}</b> is a holiday: ${esc(hol[0].name)}. Attendance is not taken.</div>`;
+    if (WEEKLY_OFF.includes(dow(d))) return $('#grid').innerHTML = `<div class="card"><b>${esc(d)}</b> is a weekly off day. Attendance is not taken.</div>`;
+    const cur = Object.fromEntries(at.map(x => [x.student_id, x.status]));
+    const saved = st.some(s => cur[s.id]);
+    $('#grid').innerHTML = `<div class="card"><p><button id="allp">Mark all present</button></p>${tbl(['Admission no', 'Student', 'Status'], st.map(s => [esc(s.admission_no), esc(s.full_name),
+      `<select class="at" data-id="${esc(s.id)}" aria-label="Status for ${esc(s.full_name)}">${Object.entries(ST).map(([k, v]) => `<option value="${k}" ${(cur[s.id] || 'present') === k ? 'selected' : ''}>${v}</option>`).join('')}</select>`]))}
+      <p class="mut">${st.length} students. ${saved ? 'Attendance is already saved for this date; saving will update it.' : 'Not saved yet.'}</p><button id="sv" class="pri">Save attendance</button></div>`;
+    $('#allp').onclick = () => document.querySelectorAll('.at').forEach(s => s.value = 'present');
+    $('#sv').onclick = safe(async ev => {
+      const rows = [...document.querySelectorAll('.at')].map(s => ({ student_id: s.dataset.id, date: d, status: s.value }));
+      if (!rows.length) return toast('No students in this class', 1);
+      busy(ev.target, 1);
+      try { await q(sb.from('attendance').upsert(rows, { onConflict: 'student_id,date' })); toast(`Attendance saved for ${rows.length} students`); }
+      finally { busy(ev.target, 0); }
+    });
+  });
+
+  $('#rp').onclick = safe(async () => {
+    const m = $('#m').value, cid = $('#c').value; if (!m) return toast('Choose a month', 1);
+    const st = await q(sb.from('students').select('id,admission_no,full_name').eq('class_id', cid).order('admission_no'));
+    const ids = new Set(st.map(s => s.id));
+    const at = (await pages(() => sb.from('attendance').select('student_id,status').gte('date', m + '-01').lte('date', monthEnd(m)).order('date').order('student_id'))).filter(x => ids.has(x.student_id));
+    $('#rep').innerHTML = `<div class="card">${tbl(['Admission no', 'Student', 'Present', 'Late', 'Absent', 'Leave', 'Attendance %'], st.map(s => {
+      const r = at.filter(x => x.student_id === s.id), c = k => r.filter(x => x.status === k).length;
+      return [esc(s.admission_no), esc(s.full_name), c('present'), c('late'), c('absent'), c('leave'), `<b>${attPct(r)}</b>`];
+    }))}<p class="mut">Attendance % = (Present + Late) divided by days marked. Holidays and weekly offs are not counted.</p></div>`;
+  });
+}
+
+/* Admin: holidays */
+async function holidaysView(el) {
+  const h = await q(sb.from('holidays').select('id,date,name').order('date'));
+  el.innerHTML = `<h2>Holidays</h2><form id="hf" class="card row"><label>Date<input type="date" name="date" required></label>
+  <label>Holiday name<input name="name" required minlength="2" maxlength="80"></label><button class="pri">Add holiday</button></form>
+  <div class="card">${tbl(['Date', 'Holiday', ''], h.map(x => [esc(x.date), esc(x.name), `<button data-id="${esc(x.id)}">Remove</button>`]))}</div>`;
+  $('#hf').onsubmit = safe(async ev => { ev.preventDefault(); await q(sb.from('holidays').insert(Object.fromEntries(new FormData(ev.target)))); toast('Holiday added'); holidaysView(el); });
+  el.querySelector('.card:last-child').onclick = safe(async e => {
+    const id = e.target.dataset.id; if (!id || !confirm('Remove this holiday?')) return;
+    await q(sb.from('holidays').delete().eq('id', id)); holidaysView(el);
+  });
+}
+
+/* Student: monthly calendar */
+async function myAttendance(el) {
+  el.innerHTML = `<h2>My attendance</h2><div class="card row"><label>Month<input type="month" id="m" value="${today().slice(0, 7)}"></label></div><div id="out"></div>`;
+  const draw = safe(async () => {
+    const m = $('#m').value; if (!m) return;
+    const y = +m.slice(0, 4), mo = +m.slice(5), last = new Date(y, mo, 0).getDate();
+    const [at, hol, all] = await Promise.all([
+      q(sb.from('attendance').select('date,status').gte('date', m + '-01').lte('date', monthEnd(m))),
+      q(sb.from('holidays').select('date,name').gte('date', m + '-01').lte('date', monthEnd(m)).order('date')),
+      pages(() => sb.from('attendance').select('status').order('date'))
+    ]);
+    const A = Object.fromEntries(at.map(x => [x.date, x.status])), H = Object.fromEntries(hol.map(x => [x.date, x.name]));
+    const cnt = k => at.filter(x => x.status === k).length;
+    const cells = Array(new Date(y, mo - 1, 1).getDay()).fill('<div class="cd e"></div>');
+    for (let d = 1; d <= last; d++) {
+      const dt = `${m}-${String(d).padStart(2, '0')}`; let c = 'cd', lab = '';
+      if (H[dt]) { c += ' h'; lab = H[dt]; } else if (A[dt]) { c += ' ' + A[dt]; lab = ST[A[dt]]; } else if (WEEKLY_OFF.includes(dow(dt))) { c += ' o'; lab = 'Off'; }
+      cells.push(`<div class="${c}" title="${esc(lab)}"><b>${d}</b><span>${esc(lab)}</span></div>`);
+    }
+    $('#out').innerHTML = `<div class="stats"><div class="card stat"><span class="mut">This month</span><b>${attPct(at)}</b></div>
+      <div class="card stat"><span class="mut">Present / Late</span><b>${cnt('present')} / ${cnt('late')}</b></div>
+      <div class="card stat"><span class="mut">Absent / Leave</span><b>${cnt('absent')} / ${cnt('leave')}</b></div>
+      <div class="card stat"><span class="mut">Overall attendance</span><b>${attPct(all)}</b></div></div>
+      <div class="card"><div class="cal">${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(w => `<div class="wd">${w}</div>`).join('')}${cells.join('')}</div>
+      <div class="lg"><span><i class="present"></i>Present</span><span><i class="late"></i>Late</span><span><i class="absent"></i>Absent</span><span><i class="leave"></i>Leave</span><span><i class="h"></i>Holiday</span><span><i class="o"></i>Weekly off</span></div></div>
+      ${hol.length ? `<div class="card"><b>Holidays this month</b><br>${hol.map(x => `${esc(x.date)}: ${esc(x.name)}`).join('<br>')}</div>` : ''}`;
+  });
+  $('#m').onchange = draw; draw();
+}
 start();
