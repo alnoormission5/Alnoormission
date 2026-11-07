@@ -281,7 +281,7 @@ async function holidaysView(el) {
 
 /* Student: monthly calendar */
 async function myAttendance(el) {
-  el.innerHTML = `<h2>My attendance</h2><div class="card row"><label>Month<input type="month" id="m" value="${today().slice(0, 7)}"></label></div><div id="out"></div>`;
+  el.innerHTML = `<h2>My attendance</h2><div class="card row"><label>Month<input type="month" id="m" value="${today().slice(0, 7)}"></label></div><div id="attout"></div>`;
   const draw = safe(async () => {
     const m = $('#m').value; if (!m) return;
     const y = +m.slice(0, 4), mo = +m.slice(5), last = new Date(y, mo, 0).getDate();
@@ -298,7 +298,7 @@ async function myAttendance(el) {
       if (H[dt]) { c += ' h'; lab = H[dt]; } else if (A[dt]) { c += ' ' + A[dt]; lab = ST[A[dt]]; } else if (WEEKLY_OFF.includes(dow(dt))) { c += ' o'; lab = 'Off'; }
       cells.push(`<div class="${c}" title="${esc(lab)}"><b>${d}</b><span>${esc(lab)}</span></div>`);
     }
-    $('#out').innerHTML = `<div class="stats"><div class="card stat"><span class="mut">This month</span><b>${attPct(at)}</b></div>
+    $('#attout').innerHTML = `<div class="stats"><div class="card stat"><span class="mut">This month</span><b>${attPct(at)}</b></div>
       <div class="card stat"><span class="mut">Present / Late</span><b>${cnt('present')} / ${cnt('late')}</b></div>
       <div class="card stat"><span class="mut">Absent / Leave</span><b>${cnt('absent')} / ${cnt('leave')}</b></div>
       <div class="card stat"><span class="mut">Overall attendance</span><b>${attPct(all)}</b></div></div>
