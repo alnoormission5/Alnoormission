@@ -42,3 +42,16 @@ td input{width:96px}
 .sig{display:flex;justify-content:space-between;margin-top:48px}
 .sig div{border-top:1px solid #1b4d73;padding-top:4px;width:30%;text-align:center;font-size:13px;color:#10263a}
 @media print{@page{size:A4;margin:12mm}header,.noprint,.toast{display:none!important}body{background:#fff}main{margin:0;padding:0;max-width:none}.rc{margin:0;max-width:none;break-after:page;break-inside:avoid}.rc:last-child{break-after:auto}}
+.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.wd{font-size:12px;text-align:center;color:var(--mut);font-weight:600}
+.cd{min-height:58px;border:1px solid var(--line);border-radius:6px;padding:4px;font-size:11px;display:flex;flex-direction:column;overflow:hidden}
+.cd b{font-size:13px}.cd span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cd.e{border:0}
+.cd.present,.lg i.present{background:#d6efdf;color:#12522d}
+.cd.absent,.lg i.absent{background:#f8d7d4;color:#7a1710}
+.cd.late,.lg i.late{background:#fbebc4;color:#6b4a00}
+.cd.leave,.lg i.leave{background:#d4e6f6;color:#134a73}
+.cd.h,.lg i.h{background:#ffe3cc;color:#7a3e00}
+.cd.o,.lg i.o{background:var(--bg);color:var(--mut)}
+.lg{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;margin-top:10px}
+.lg i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:4px;vertical-align:-2px;border:1px solid var(--line)}
